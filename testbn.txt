@@ -1,0 +1,146 @@
+`timescale 1ns/1ps
+
+module tb_debounce;
+
+    reg  clk;
+    reg  rst_n;
+    reg  btn_in;
+    wire btn_clean;
+    wire btn_pulse;
+
+    integer pulse_count;
+    integer errors;
+
+    // Instantiate DUT (small DEBOUNCE_LIMIT so sim runs fast)
+    debounce #(.DEBOUNCE_LIMIT(10)) dut (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .btn_in     (btn_in),
+        .btn_clean  (btn_clean),
+        .btn_pulse  (btn_pulse)
+    );
+
+    // 100 MHz clock
+    always #5 clk = ~clk;
+
+    // Count pulses generated
+    always @(posedge clk) begin
+        if (btn_pulse) pulse_count = pulse_count + 1;
+    end
+
+    // Task: simulate a bouncy button press
+    // Generates random glitches around the transition, then settles
+    task bouncy_press(input integer bounce_cycles);
+        integer i;
+        begin
+            for (i = 0; i < bounce_cycles; i = i + 1) begin
+                btn_in = $random % 2;
+                #7;  // random-ish short glitches, shorter than debounce window
+            end
+            btn_in = 1'b1;  // settle high
+        end
+    endtask
+
+    task bouncy_release(input integer bounce_cycles);
+        integer i;
+        begin
+            for (i = 0; i < bounce_cycles; i = i + 1) begin
+                btn_in = $random % 2;
+                #7;
+            end
+            btn_in = 1'b0;  // settle low
+        end
+    endtask
+
+    initial begin
+        clk         = 1'b0;
+        rst_n       = 1'b0;
+        btn_in      = 1'b0;
+        pulse_count = 0;
+        errors      = 0;
+
+        #20 rst_n = 1'b1;
+        #40;
+
+        // ---- Test 1: clean single press should give exactly 1 pulse ----
+        $display("---- Test 1: Clean press ----");
+        btn_in = 1'b1;
+        #300;  // hold well past debounce window
+        if (btn_clean !== 1'b1) begin
+            $display("FAIL: btn_clean did not go high after clean press");
+            errors = errors + 1;
+        end else
+            $display("PASS: btn_clean went high after clean press");
+
+        btn_in = 1'b0;
+        #300;
+
+        // ---- Test 2: noisy/bouncy press should still give exactly 1 pulse ----
+        $display("---- Test 2: Bouncy press ----");
+        pulse_count = 0;
+        bouncy_press(15);   // glitchy transition
+        #300;               // let it settle & debounce
+        if (btn_clean !== 1'b1) begin
+            $display("FAIL: btn_clean did not settle high after bouncy press");
+            errors = errors + 1;
+        end
+        if (pulse_count == 1)
+            $display("PASS: exactly 1 pulse generated despite bounce (count=%0d)", pulse_count);
+        else begin
+            $display("FAIL: expected 1 pulse, got %0d", pulse_count);
+            errors = errors + 1;
+        end
+
+        // ---- Test 3: bouncy release, then bouncy press again ----
+        $display("---- Test 3: Bouncy release + second press ----");
+        bouncy_release(15);
+        #300;
+        if (btn_clean !== 1'b0) begin
+            $display("FAIL: btn_clean did not settle low after release");
+            errors = errors + 1;
+        end else
+            $display("PASS: btn_clean settled low after release");
+
+        pulse_count = 0;
+        bouncy_press(15);
+        #300;
+        if (pulse_count == 1)
+            $display("PASS: exactly 1 pulse on second bouncy press (count=%0d)", pulse_count);
+        else begin
+            $display("FAIL: expected 1 pulse, got %0d", pulse_count);
+            errors = errors + 1;
+        end
+
+        // ---- Test 4: glitch shorter than debounce window should be ignored ----
+        $display("---- Test 4: Short glitch rejection ----");
+        btn_in = 1'b0;
+        #100;
+        pulse_count = 0;
+        btn_in = 1'b1;
+        #15;             // shorter than DEBOUNCE_LIMIT*10ns = 100ns
+        btn_in = 1'b0;
+        #200;
+        if (btn_clean === 1'b0 && pulse_count == 0)
+            $display("PASS: short glitch correctly ignored");
+        else begin
+            $display("FAIL: short glitch incorrectly registered (btn_clean=%b, pulses=%0d)",
+                      btn_clean, pulse_count);
+            errors = errors + 1;
+        end
+
+        // ---- Summary ----
+        if (errors == 0)
+            $display("ALL TESTS PASSED");
+        else
+            $display("%0d TEST(S) FAILED", errors);
+
+        $finish;
+    end
+
+    // Waveform dump for EPWave
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_debounce);
+    end
+
+endmodule

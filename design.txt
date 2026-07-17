@@ -1,0 +1,55 @@
+module debounce #(
+    parameter DEBOUNCE_LIMIT = 20   // number of stable clk cycles required
+)(
+    input  wire clk,
+    input  wire rst_n,
+    input  wire btn_in,       // raw, noisy button input
+    output reg  btn_clean,    // debounced, stable level output
+    output reg  btn_pulse     // single-cycle pulse on clean 0->1 transition
+);
+
+    reg [1:0]  sync_reg;      // 2-FF synchronizer for metastability
+    reg [31:0] count;
+    reg        btn_clean_prev;
+
+    // Synchronize the async button input to clk domain
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            sync_reg <= 2'b00;
+        else
+            sync_reg <= {sync_reg[0], btn_in};
+    end
+
+    wire btn_sync = sync_reg[1];
+
+    // Debounce counter: only update btn_clean once input is stable
+    // for DEBOUNCE_LIMIT consecutive cycles
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            count      <= 32'd0;
+            btn_clean  <= 1'b0;
+        end else begin
+            if (btn_sync != btn_clean) begin
+                count <= count + 1'b1;
+                if (count >= DEBOUNCE_LIMIT-1) begin
+                    btn_clean <= btn_sync;
+                    count     <= 32'd0;
+                end
+            end else begin
+                count <= 32'd0;
+            end
+        end
+    end
+
+    // Edge detect -> generate single-cycle pulse on press (0->1)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            btn_clean_prev <= 1'b0;
+            btn_pulse      <= 1'b0;
+        end else begin
+            btn_clean_prev <= btn_clean;
+            btn_pulse      <= btn_clean & ~btn_clean_prev;
+        end
+    end
+
+endmodule
